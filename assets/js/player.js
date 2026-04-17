@@ -1,12 +1,12 @@
 /**
- * Microfix Audio Platform — Media Player
+ * Microfix Audio Platform — Player JS v2
  *
- * Responsibilities:
- *  - Intercept .play-media button clicks
- *  - Route to audio (sticky bar) or video (modal overlay) player
- *  - Full playback controls: play/pause, seek, volume, speed, ±15s
- *  - Single shared player instance — switching episode stops previous
- *  - Keyboard accessible (Space, ←, →, M)
+ * Handles:
+ *  - Audio: sticky bottom bar with full controls
+ *  - Video: modal overlay (self-hosted + YouTube/Vimeo)
+ *  - Progress saving via AJAX (debounced, every 5s)
+ *  - Resume playback from saved position
+ *  - Keyboard shortcuts: Space, ←, →, M
  *
  * @package MicrofixAudioPlatform
  */
@@ -14,435 +14,387 @@
 ( function () {
 	'use strict';
 
-	// ─── State ──────────────────────────────────────────────────────────────────
+	// ── Config ────────────────────────────────────────────────────────────────
+	const cfg = window.MicrofixConfig || {};
 
+	// ── State ─────────────────────────────────────────────────────────────────
 	const state = {
-		currentEpisodeId : null,
-		currentType      : null,   // 'audio' | 'video' | 'external-video'
-		isPlaying        : false,
-		isMuted          : false,
-		isDragging       : false,
+		episodeId  : null,
+		type       : null,      // 'audio' | 'video' | 'external-video'
+		isDragging : false,
+		saveTimer  : null,
 	};
 
-	// ─── Element references ──────────────────────────────────────────────────────
+	// ── DOM References ────────────────────────────────────────────────────────
+	const bar       = document.getElementById( 'mfx-player-bar' );
+	const audioEl   = document.getElementById( 'mfx-audio-el' );
 
-	const el = {
-		player         : document.getElementById( 'mfx-global-player' ),
-		audio          : document.getElementById( 'mfx-audio-element' ),
-		title          : document.getElementById( 'mfx-player-title' ),
-		typeBadge      : document.getElementById( 'mfx-player-type' ),
-		thumbnail      : document.querySelector( '.mfx-player__thumbnail-inner' ),
+	// bail if player shell not present
+	if ( ! bar || ! audioEl ) return;
 
-		btnPlayPause   : document.getElementById( 'mfx-btn-play-pause' ),
-		iconPlay       : document.querySelector( '.mfx-icon-play' ),
-		iconPause      : document.querySelector( '.mfx-icon-pause' ),
+	const barThumbInner = document.getElementById( 'mfx-bar-thumb-inner' );
+	const barTitle      = document.getElementById( 'mfx-bar-title' );
+	const barCurrent    = document.getElementById( 'mfx-bar-current' );
+	const barDuration   = document.getElementById( 'mfx-bar-duration' );
 
-		btnRewind      : document.getElementById( 'mfx-btn-rewind' ),
-		btnForward     : document.getElementById( 'mfx-btn-forward' ),
-		btnMute        : document.getElementById( 'mfx-btn-mute' ),
-		iconVolume     : document.querySelector( '.mfx-icon-volume' ),
-		iconMuted      : document.querySelector( '.mfx-icon-muted' ),
+	const btnPP    = document.getElementById( 'mfx-btn-pp' );
+	const btnRW    = document.getElementById( 'mfx-btn-rw' );
+	const btnFW    = document.getElementById( 'mfx-btn-fw' );
+	const btnClose = document.getElementById( 'mfx-btn-close' );
+	const speed    = document.getElementById( 'mfx-bar-speed' );
 
-		progressBar    : document.getElementById( 'mfx-progress-bar' ),
-		progressFill   : document.getElementById( 'mfx-progress-fill' ),
-		progressThumb  : document.getElementById( 'mfx-progress-thumb' ),
-		timeCurrent    : document.getElementById( 'mfx-time-current' ),
-		timeDuration   : document.getElementById( 'mfx-time-duration' ),
+	const iconPlay  = bar.querySelector( '.mfx-icon-play' );
+	const iconPause = bar.querySelector( '.mfx-icon-pause' );
 
-		volumeSlider   : document.getElementById( 'mfx-volume-slider' ),
-		speedSelect    : document.getElementById( 'mfx-speed-select' ),
-		btnClose       : document.getElementById( 'mfx-btn-close' ),
+	const progress      = document.getElementById( 'mfx-bar-progress' );
+	const progressFill  = document.getElementById( 'mfx-bar-fill' );
+	const progressThumb = document.getElementById( 'mfx-bar-thumb-dot' );
 
-		// Video modal.
-		videoModal     : document.getElementById( 'mfx-video-modal' ),
-		videoElement   : document.getElementById( 'mfx-video-element' ),
-		videoIframe    : document.getElementById( 'mfx-video-iframe' ),
-		videoBackdrop  : document.getElementById( 'mfx-video-backdrop' ),
-		btnVideoClose  : document.getElementById( 'mfx-video-close' ),
-	};
+	// Video modal
+	const videoModal   = document.getElementById( 'mfx-video-modal' );
+	const videoEl      = document.getElementById( 'mfx-video-el' );
+	const videoIframe  = document.getElementById( 'mfx-video-iframe' );
+	const videoBackdrop = document.getElementById( 'mfx-video-backdrop' );
+	const videoClose   = document.getElementById( 'mfx-video-close' );
 
-	// Abort silently if player shell not present in DOM.
-	if ( ! el.player || ! el.audio ) return;
+	// ── Utils ─────────────────────────────────────────────────────────────────
 
-	// ─── Utility helpers ─────────────────────────────────────────────────────────
-
-	/**
-	 * Format seconds to m:ss or h:mm:ss.
-	 *
-	 * @param {number} seconds
-	 * @returns {string}
-	 */
-	function formatTime( seconds ) {
-		if ( isNaN( seconds ) || ! isFinite( seconds ) ) return '0:00';
-		const h = Math.floor( seconds / 3600 );
-		const m = Math.floor( ( seconds % 3600 ) / 60 );
-		const s = Math.floor( seconds % 60 );
-		const ss = String( s ).padStart( 2, '0' );
-		if ( h > 0 ) {
-			return `${ h }:${ String( m ).padStart( 2, '0' ) }:${ ss }`;
-		}
-		return `${ m }:${ ss }`;
+	function fmt( s ) {
+		if ( ! isFinite( s ) || isNaN( s ) ) return '0:00';
+		const h  = Math.floor( s / 3600 );
+		const m  = Math.floor( ( s % 3600 ) / 60 );
+		const ss = String( Math.floor( s % 60 ) ).padStart( 2, '0' );
+		return h > 0 ? `${ h }:${ String( m ).padStart( 2, '0' ) }:${ ss }` : `${ m }:${ ss }`;
 	}
 
-	/**
-	 * Clamp a number between min and max.
-	 *
-	 * @param {number} val
-	 * @param {number} min
-	 * @param {number} max
-	 * @returns {number}
-	 */
-	function clamp( val, min, max ) {
-		return Math.min( Math.max( val, min ), max );
-	}
+	function clamp( v, lo, hi ) { return Math.min( Math.max( v, lo ), hi ); }
 
-	/**
-	 * Calculate seek position from a pointer/click event on the progress bar.
-	 *
-	 * @param {PointerEvent|MouseEvent} event
-	 * @returns {number} 0–1 ratio
-	 */
-	function getSeekRatio( event ) {
-		const rect  = el.progressBar.querySelector( '.mfx-player__progress-track' ).getBoundingClientRect();
-		const ratio = ( event.clientX - rect.left ) / rect.width;
-		return clamp( ratio, 0, 1 );
-	}
-
-	// ─── Player UI updates ───────────────────────────────────────────────────────
-
-	function enableControls() {
-		[ el.btnPlayPause, el.btnRewind, el.btnForward,
-		  el.btnMute, el.volumeSlider, el.speedSelect ].forEach( el => el.disabled = false );
-	}
-
-	function updatePlayPauseUI( playing ) {
-		state.isPlaying = playing;
-		el.iconPlay.style.display  = playing ? 'none' : '';
-		el.iconPause.style.display = playing ? '' : 'none';
-		el.btnPlayPause.setAttribute( 'aria-label', playing ? 'Pause' : 'Play' );
-	}
-
-	function updateProgress() {
-		const audio    = el.audio;
-		const duration = audio.duration || 0;
-		const current  = audio.currentTime || 0;
-		const pct      = duration ? ( current / duration ) * 100 : 0;
-
-		el.progressFill.style.width       = pct + '%';
-		el.progressThumb.style.left       = pct + '%';
-		el.timeCurrent.textContent        = formatTime( current );
-		el.timeDuration.textContent       = formatTime( duration );
-		el.progressBar.setAttribute( 'aria-valuenow', Math.round( pct ) );
-	}
-
-	function showPlayer() {
-		el.player.classList.remove( 'mfx-global-player--hidden' );
-		el.player.classList.add( 'mfx-global-player--visible' );
-	}
-
-	function hidePlayer() {
-		el.player.classList.add( 'mfx-global-player--hidden' );
-		el.player.classList.remove( 'mfx-global-player--visible' );
-	}
-
-	function setEpisodeMeta( title, type ) {
-		el.title.textContent     = title || '';
-		el.typeBadge.textContent = type === 'audio' ? '🎧 Audio' : '🎬 Video';
-	}
-
-	function resetAudio() {
-		el.audio.pause();
-		el.audio.src     = '';
-		el.audio.currentTime = 0;
-		updatePlayPauseUI( false );
-		updateProgress();
-	}
-
-	// ─── Audio episode loader ────────────────────────────────────────────────────
-
-	/**
-	 * Load and play an audio episode in the sticky bottom bar.
-	 *
-	 * @param {string} streamUrl  Secure stream endpoint URL.
-	 * @param {string} title      Episode title.
-	 * @param {number} episodeId  Episode post ID.
-	 */
-	function loadAudio( streamUrl, title, episodeId ) {
-		// Same episode already playing → just toggle play/pause.
-		if ( state.currentEpisodeId === episodeId && state.currentType === 'audio' ) {
-			togglePlayPause();
-			return;
-		}
-
-		state.currentEpisodeId = episodeId;
-		state.currentType      = 'audio';
-
-		resetAudio();
-		el.audio.src = streamUrl;
-		el.audio.load();
-
-		setEpisodeMeta( title, 'audio' );
-		showPlayer();
-		enableControls();
-
-		el.audio.play().catch( err => {
-			console.error( '[Microfix Player] Audio play error:', err );
-		} );
-	}
-
-	// ─── Video episode loader ────────────────────────────────────────────────────
-
-	/**
-	 * Open the video modal and load a self-hosted video.
-	 *
-	 * @param {string} streamUrl  Secure stream endpoint URL.
-	 * @param {string} title      Episode title.
-	 * @param {number} episodeId  Episode post ID.
-	 */
-	function loadVideo( streamUrl, title, episodeId ) {
-		// Stop any audio playing.
-		resetAudio();
-		hidePlayer();
-
-		state.currentEpisodeId = episodeId;
-		state.currentType      = 'video';
-
-		el.videoIframe.style.display  = 'none';
-		el.videoElement.style.display = '';
-		el.videoIframe.src            = '';
-
-		el.videoElement.src = streamUrl;
-		el.videoElement.load();
-
-		openVideoModal( title );
-		el.videoElement.play().catch( err => {
-			console.error( '[Microfix Player] Video play error:', err );
-		} );
-	}
-
-	/**
-	 * Open the video modal and embed an external video (YouTube / Vimeo).
-	 *
-	 * Converts watch URLs to embeddable URLs automatically.
-	 *
-	 * @param {string} externalUrl  External video URL.
-	 * @param {string} title        Episode title.
-	 * @param {number} episodeId    Episode post ID.
-	 */
-	function loadExternalVideo( externalUrl, title, episodeId ) {
-		resetAudio();
-		hidePlayer();
-
-		state.currentEpisodeId = episodeId;
-		state.currentType      = 'external-video';
-
-		el.videoElement.style.display = 'none';
-		el.videoElement.src           = '';
-		el.videoIframe.style.display  = '';
-
-		const embedUrl = resolveEmbedUrl( externalUrl );
-		el.videoIframe.src = embedUrl;
-
-		openVideoModal( title );
-	}
-
-	/**
-	 * Convert a YouTube / Vimeo watch URL to an embed URL.
-	 *
-	 * @param {string} url
-	 * @returns {string}
-	 */
 	function resolveEmbedUrl( url ) {
-		// YouTube — watch?v=ID or youtu.be/ID
-		const ytMatch = url.match( /(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/ );
-		if ( ytMatch ) {
-			return `https://www.youtube.com/embed/${ ytMatch[ 1 ] }?autoplay=1&rel=0`;
-		}
-
-		// Vimeo — vimeo.com/ID
-		const vimeoMatch = url.match( /vimeo\.com\/(\d+)/ );
-		if ( vimeoMatch ) {
-			return `https://player.vimeo.com/video/${ vimeoMatch[ 1 ] }?autoplay=1`;
-		}
-
-		// Unknown: return as-is and hope the browser handles it.
+		const yt = url.match( /(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{11})/ );
+		if ( yt ) return `https://www.youtube.com/embed/${ yt[1] }?autoplay=1&rel=0`;
+		const vm = url.match( /vimeo\.com\/(\d+)/ );
+		if ( vm ) return `https://player.vimeo.com/video/${ vm[1] }?autoplay=1`;
 		return url;
 	}
 
-	// ─── Video modal ─────────────────────────────────────────────────────────────
+	// ── UI ────────────────────────────────────────────────────────────────────
 
-	function openVideoModal( title ) {
-		el.videoModal.hidden = false;
-		el.videoModal.setAttribute( 'aria-label', title || 'Video Player' );
-		document.body.classList.add( 'mfx-modal-open' );
+	function showBar()  { bar.classList.add( 'mfx-player-bar--visible' ); bar.classList.remove( 'mfx-player-bar--hidden' ); }
+	function hideBar()  { bar.classList.add( 'mfx-player-bar--hidden' );  bar.classList.remove( 'mfx-player-bar--visible' ); }
 
-		// Trap focus inside modal.
-		setTimeout( () => el.btnVideoClose.focus(), 50 );
+	function enableControls() {
+		[ btnPP, btnRW, btnFW, speed ].forEach( el => el.disabled = false );
 	}
 
-	function closeVideoModal() {
-		el.videoModal.hidden = true;
-		document.body.classList.remove( 'mfx-modal-open' );
-
-		el.videoElement.pause();
-		el.videoElement.src = '';
-		el.videoIframe.src  = '';
-
-		state.currentEpisodeId = null;
-		state.currentType      = null;
+	function setPlaying( playing ) {
+		iconPlay.style.display  = playing ? 'none' : '';
+		iconPause.style.display = playing ? '' : 'none';
+		btnPP.setAttribute( 'aria-label', playing ? 'Pause' : 'Play' );
 	}
 
-	// ─── Playback controls ───────────────────────────────────────────────────────
+	function updateProgress() {
+		const dur = audioEl.duration || 0;
+		const cur = audioEl.currentTime || 0;
+		const pct = dur ? ( cur / dur ) * 100 : 0;
 
-	function togglePlayPause() {
-		if ( ! el.audio.src ) return;
-		if ( el.audio.paused ) {
-			el.audio.play().catch( console.error );
+		progressFill.style.width  = pct + '%';
+		progressThumb.style.left  = pct + '%';
+		barCurrent.textContent    = fmt( cur );
+		barDuration.textContent   = fmt( dur );
+		progress.setAttribute( 'aria-valuenow', Math.round( pct ) );
+	}
+
+	function setMeta( title, thumbUrl ) {
+		barTitle.textContent = title || '';
+		if ( thumbUrl ) {
+			barThumbInner.style.backgroundImage = `url(${ thumbUrl })`;
 		} else {
-			el.audio.pause();
+			barThumbInner.style.backgroundImage = '';
 		}
 	}
 
-	function skip( seconds ) {
-		if ( ! el.audio.src ) return;
-		el.audio.currentTime = clamp( el.audio.currentTime + seconds, 0, el.audio.duration || 0 );
-	}
+	// ── Audio ─────────────────────────────────────────────────────────────────
 
-	function seek( ratio ) {
-		if ( ! el.audio.duration ) return;
-		el.audio.currentTime = ratio * el.audio.duration;
-	}
-
-	function setVolume( level ) {
-		el.audio.volume       = clamp( level, 0, 1 );
-		el.volumeSlider.value = el.audio.volume;
-	}
-
-	function toggleMute() {
-		el.audio.muted        = ! el.audio.muted;
-		state.isMuted         = el.audio.muted;
-		el.iconVolume.style.display = el.audio.muted ? 'none' : '';
-		el.iconMuted.style.display  = el.audio.muted ? '' : 'none';
-		el.btnMute.setAttribute( 'aria-label', el.audio.muted ? 'Unmute' : 'Mute' );
-	}
-
-	// ─── Event: play button clicks ────────────────────────────────────────────────
-
-	document.addEventListener( 'click', function ( event ) {
-		const btn = event.target.closest( '.play-media' );
-		if ( ! btn ) return;
-
-		event.preventDefault();
-
-		const streamUrl  = btn.dataset.stream;
-		const type       = btn.dataset.type;   // 'audio' | 'video' | 'external-video'
-		const episodeId  = parseInt( btn.dataset.episode, 10 ) || 0;
-		const title      = btn.dataset.title || 'Episode';
-
-		if ( ! streamUrl ) {
-			console.warn( '[Microfix Player] No stream URL on button', btn );
+	function loadAudio( url, title, episodeId, resumeAt ) {
+		// Same episode? Just toggle.
+		if ( state.episodeId === episodeId && state.type === 'audio' ) {
+			togglePP();
 			return;
 		}
 
+		state.episodeId = episodeId;
+		state.type      = 'audio';
+
+		audioEl.pause();
+		audioEl.src         = url;
+		audioEl.currentTime = 0;
+		audioEl.load();
+
+		// Fetch thumbnail for bar via WP REST if possible — fallback to empty.
+		fetchEpisodeMeta( episodeId, title );
+
+		showBar();
+		enableControls();
+
+		audioEl.addEventListener( 'loadedmetadata', function onMeta() {
+			if ( resumeAt > 0 ) audioEl.currentTime = resumeAt;
+			audioEl.play().catch( console.error );
+			audioEl.removeEventListener( 'loadedmetadata', onMeta );
+		}, { once: true } );
+	}
+
+	function fetchEpisodeMeta( episodeId, fallbackTitle ) {
+		if ( ! cfg.siteUrl ) { setMeta( fallbackTitle, '' ); return; }
+
+		fetch( `${ cfg.siteUrl }/wp-json/wp/v2/episode/${ episodeId }?_fields=title,mfx_thumbnail_url,mfx_duration` )
+			.then( r => r.ok ? r.json() : null )
+			.then( data => {
+				if ( ! data ) { setMeta( fallbackTitle, '' ); return; }
+
+				// Decode HTML entities in title.
+				const parser = new DOMParser();
+				const title  = data.title?.rendered
+					? parser.parseFromString( data.title.rendered, 'text/html' ).body.textContent
+					: fallbackTitle;
+
+				setMeta( title, data.mfx_thumbnail_url || '' );
+
+				// Show duration in bar if available.
+				if ( data.mfx_duration && barDuration ) {
+					barDuration.textContent = data.mfx_duration;
+				}
+			} )
+			.catch( () => setMeta( fallbackTitle, '' ) );
+	}
+
+	// ── Video ─────────────────────────────────────────────────────────────────
+
+	function loadVideo( url, title, episodeId ) {
+		audioEl.pause();
+		hideBar();
+
+		state.episodeId = episodeId;
+		state.type      = 'video';
+
+		videoIframe.style.display = 'none';
+		videoIframe.src           = '';
+		videoEl.style.display     = '';
+		videoEl.src               = url;
+		videoEl.load();
+
+		openVideoModal( title );
+		videoEl.play().catch( console.error );
+	}
+
+	function loadExternalVideo( url, title, episodeId ) {
+		audioEl.pause();
+		hideBar();
+
+		state.episodeId = episodeId;
+		state.type      = 'external-video';
+
+		videoEl.style.display     = 'none';
+		videoEl.src               = '';
+		videoIframe.style.display = '';
+		videoIframe.src           = resolveEmbedUrl( url );
+
+		openVideoModal( title );
+	}
+
+	function openVideoModal( title ) {
+		videoModal.hidden = false;
+		videoModal.setAttribute( 'aria-label', title || 'Video' );
+		document.body.classList.add( 'mfx-modal-open' );
+		setTimeout( () => videoClose.focus(), 50 );
+	}
+
+	function closeVideoModal() {
+		videoModal.hidden = true;
+		document.body.classList.remove( 'mfx-modal-open' );
+		videoEl.pause();
+		videoEl.src   = '';
+		videoIframe.src = '';
+	}
+
+	// ── Playback ──────────────────────────────────────────────────────────────
+
+	function togglePP() {
+		if ( audioEl.paused ) audioEl.play().catch( console.error );
+		else audioEl.pause();
+	}
+
+	function skip( sec ) {
+		audioEl.currentTime = clamp( audioEl.currentTime + sec, 0, audioEl.duration || 0 );
+	}
+
+	function seekByRatio( ratio ) {
+		if ( ! audioEl.duration ) return;
+		audioEl.currentTime = ratio * audioEl.duration;
+	}
+
+	function getSeekRatio( evt ) {
+		const track = progress.querySelector( '.mfx-pbar-progress__track' );
+		if ( ! track ) return 0;
+		const rect = track.getBoundingClientRect();
+		return clamp( ( evt.clientX - rect.left ) / rect.width, 0, 1 );
+	}
+
+	// ── Progress saving ───────────────────────────────────────────────────────
+
+	function scheduleSave() {
+		if ( ! cfg.ajaxUrl || ! cfg.isLoggedIn || ! state.episodeId ) return;
+		clearTimeout( state.saveTimer );
+		state.saveTimer = setTimeout( saveProgress, 5000 );
+	}
+
+	function buildProgressFormData() {
+		const fd = new FormData();
+		fd.append( 'action',     'microfix_save_progress' );
+		fd.append( 'nonce',      cfg.progressNonce || '' );
+		fd.append( 'episode_id', state.episodeId );
+		fd.append( 'position',   audioEl.currentTime );
+		fd.append( 'duration',   audioEl.duration );
+		return fd;
+	}
+
+	function saveProgress() {
+		if ( ! cfg.ajaxUrl || ! cfg.isLoggedIn ) return;
+		if ( ! state.episodeId || state.type !== 'audio' ) return;
+		if ( ! audioEl.duration || audioEl.duration <= 0 ) return;
+
+		const fd = buildProgressFormData();
+
+		// sendBeacon is best-effort on unload; use fetch for mid-session saves.
+		if ( typeof fetch !== 'undefined' ) {
+			fetch( cfg.ajaxUrl, { method: 'POST', body: fd } )
+				.then( () => updateCardProgressBar() )
+				.catch( () => {} );
+		} else if ( typeof navigator.sendBeacon !== 'undefined' ) {
+			navigator.sendBeacon( cfg.ajaxUrl, fd );
+		}
+	}
+
+	/**
+	 * Update the progress bar inside the episode card on the current page
+	 * so the user can see their progress update live without a page reload.
+	 */
+	function updateCardProgressBar() {
+		if ( ! state.episodeId || ! audioEl.duration ) return;
+		const pct = Math.round( ( audioEl.currentTime / audioEl.duration ) * 100 );
+		const card = document.querySelector( `.mfx-ep-card[data-episode-id="${ state.episodeId }"]` );
+		if ( ! card ) return;
+
+		let bar = card.querySelector( '.mfx-ep-card__progress' );
+		if ( ! bar ) {
+			// Create progress bar if it doesn't exist yet on this card.
+			const fill = document.createElement( 'div' );
+			fill.className = 'mfx-ep-card__progress';
+			fill.innerHTML = '<div class="mfx-ep-card__progress-fill"></div>';
+			card.querySelector( '.mfx-ep-card__body' )?.appendChild( fill );
+			bar = fill;
+		}
+
+		const fillEl = bar.querySelector( '.mfx-ep-card__progress-fill' );
+		if ( fillEl ) fillEl.style.width = pct + '%';
+	}
+
+	// Save on page unload — sendBeacon is specifically designed for this.
+	window.addEventListener( 'beforeunload', () => {
+		if ( ! cfg.ajaxUrl || ! cfg.isLoggedIn ) return;
+		if ( ! state.episodeId || state.type !== 'audio' ) return;
+		if ( ! audioEl.duration || audioEl.duration <= 0 ) return;
+		navigator.sendBeacon?.( cfg.ajaxUrl, buildProgressFormData() );
+	} );
+
+	// Also save when tab becomes hidden (mobile background, tab switch).
+	document.addEventListener( 'visibilitychange', () => {
+		if ( document.visibilityState === 'hidden' ) saveProgress();
+	} );
+
+	// ── Event: play button clicks ─────────────────────────────────────────────
+
+	document.addEventListener( 'click', function ( e ) {
+		const btn = e.target.closest( '.play-media' );
+		if ( ! btn ) return;
+		e.preventDefault();
+
+		const url       = btn.dataset.stream;
+		const type      = btn.dataset.type;
+		const episodeId = parseInt( btn.dataset.episode, 10 ) || 0;
+		const title     = btn.dataset.title || '';
+		const resumeAt  = parseFloat( btn.dataset.resume || '0' );
+
+		if ( ! url ) return;
+
 		switch ( type ) {
 			case 'audio':
-				loadAudio( streamUrl, title, episodeId );
+				loadAudio( url, title, episodeId, resumeAt );
 				break;
 			case 'video':
-				loadVideo( streamUrl, title, episodeId );
+				loadVideo( url, title, episodeId );
 				break;
 			case 'external-video':
-				loadExternalVideo( streamUrl, title, episodeId );
+				loadExternalVideo( url, title, episodeId );
 				break;
-			default:
-				console.warn( '[Microfix Player] Unknown content type:', type );
 		}
 	} );
 
-	// ─── Audio element events ────────────────────────────────────────────────────
+	// ── Audio events ──────────────────────────────────────────────────────────
 
-	el.audio.addEventListener( 'play',       () => updatePlayPauseUI( true ) );
-	el.audio.addEventListener( 'pause',      () => updatePlayPauseUI( false ) );
-	el.audio.addEventListener( 'ended',      () => updatePlayPauseUI( false ) );
-	el.audio.addEventListener( 'timeupdate', updateProgress );
-	el.audio.addEventListener( 'loadedmetadata', updateProgress );
-	el.audio.addEventListener( 'error', function () {
-		console.error( '[Microfix Player] Audio error', el.audio.error );
-		updatePlayPauseUI( false );
+	audioEl.addEventListener( 'play',        () => setPlaying( true ) );
+	audioEl.addEventListener( 'pause',       () => setPlaying( false ) );
+	audioEl.addEventListener( 'ended',       () => { setPlaying( false ); saveProgress(); } );
+	audioEl.addEventListener( 'timeupdate',  () => { updateProgress(); scheduleSave(); } );
+	audioEl.addEventListener( 'loadedmetadata', updateProgress );
+
+	// ── Control events ────────────────────────────────────────────────────────
+
+	btnPP.addEventListener(  'click', togglePP );
+	btnRW.addEventListener(  'click', () => skip( -15 ) );
+	btnFW.addEventListener(  'click', () => skip( 15 ) );
+	speed.addEventListener(  'change', () => { audioEl.playbackRate = parseFloat( speed.value ) || 1; } );
+	btnClose.addEventListener( 'click', () => {
+		saveProgress();
+		audioEl.pause();
+		audioEl.src = '';
+		setPlaying( false );
+		updateProgress();
+		hideBar();
+		state.episodeId = null;
+		state.type = null;
 	} );
 
-	// ─── Player control events ───────────────────────────────────────────────────
+	// ── Progress bar seek ─────────────────────────────────────────────────────
 
-	el.btnPlayPause.addEventListener( 'click', togglePlayPause );
-	el.btnRewind.addEventListener(    'click', () => skip( -15 ) );
-	el.btnForward.addEventListener(   'click', () => skip( 15 ) );
-	el.btnMute.addEventListener(      'click', toggleMute );
-
-	el.volumeSlider.addEventListener( 'input', () => setVolume( parseFloat( el.volumeSlider.value ) ) );
-
-	el.speedSelect.addEventListener( 'change', () => {
-		el.audio.playbackRate = parseFloat( el.speedSelect.value ) || 1;
-	} );
-
-	el.btnClose.addEventListener( 'click', () => {
-		resetAudio();
-		hidePlayer();
-		state.currentEpisodeId = null;
-		state.currentType      = null;
-	} );
-
-	// ─── Progress bar seek ───────────────────────────────────────────────────────
-
-	el.progressBar.addEventListener( 'pointerdown', function ( e ) {
+	progress.addEventListener( 'pointerdown', e => {
 		state.isDragging = true;
-		seek( getSeekRatio( e ) );
-		el.progressBar.setPointerCapture( e.pointerId );
+		seekByRatio( getSeekRatio( e ) );
+		progress.setPointerCapture( e.pointerId );
+	} );
+	progress.addEventListener( 'pointermove', e => {
+		if ( state.isDragging ) seekByRatio( getSeekRatio( e ) );
+	} );
+	progress.addEventListener( 'pointerup',  () => { state.isDragging = false; } );
+	progress.addEventListener( 'keydown', e => {
+		if ( e.key === 'ArrowRight' ) { skip(  5 ); e.preventDefault(); }
+		if ( e.key === 'ArrowLeft'  ) { skip( -5 ); e.preventDefault(); }
 	} );
 
-	el.progressBar.addEventListener( 'pointermove', function ( e ) {
-		if ( ! state.isDragging ) return;
-		seek( getSeekRatio( e ) );
-	} );
+	// ── Video modal events ────────────────────────────────────────────────────
 
-	el.progressBar.addEventListener( 'pointerup', function () {
-		state.isDragging = false;
-	} );
+	if ( videoClose )   videoClose.addEventListener(   'click', closeVideoModal );
+	if ( videoBackdrop ) videoBackdrop.addEventListener( 'click', closeVideoModal );
 
-	el.progressBar.addEventListener( 'keydown', function ( e ) {
-		const STEP = 5; // seconds
-		if ( e.key === 'ArrowRight' ) { skip(  STEP ); e.preventDefault(); }
-		if ( e.key === 'ArrowLeft'  ) { skip( -STEP ); e.preventDefault(); }
-	} );
+	// ── Global keyboard ───────────────────────────────────────────────────────
 
-	// ─── Video modal events ──────────────────────────────────────────────────────
-
-	el.btnVideoClose.addEventListener(  'click',   closeVideoModal );
-	el.videoBackdrop.addEventListener(  'click',   closeVideoModal );
-
-	// ─── Global keyboard shortcuts ───────────────────────────────────────────────
-
-	document.addEventListener( 'keydown', function ( e ) {
-		// Ignore when focus is on an input, textarea, or select.
-		const tag = document.activeElement?.tagName;
-		if ( [ 'INPUT', 'TEXTAREA', 'SELECT' ].includes( tag ) ) return;
-
-		// Only when audio player is active.
-		if ( state.currentType !== 'audio' ) return;
-
+	document.addEventListener( 'keydown', e => {
+		if ( [ 'INPUT', 'TEXTAREA', 'SELECT' ].includes( document.activeElement?.tagName ) ) return;
+		if ( state.type !== 'audio' ) return;
 		switch ( e.code ) {
-			case 'Space':
-				e.preventDefault();
-				togglePlayPause();
-				break;
-			case 'ArrowRight':
-				skip( 15 );
-				break;
-			case 'ArrowLeft':
-				skip( -15 );
-				break;
-			case 'KeyM':
-				toggleMute();
-				break;
+			case 'Space':       e.preventDefault(); togglePP(); break;
+			case 'ArrowRight':  skip( 15 );  break;
+			case 'ArrowLeft':   skip( -15 ); break;
+			case 'KeyM':        audioEl.muted = ! audioEl.muted; break;
 		}
 	} );
 
