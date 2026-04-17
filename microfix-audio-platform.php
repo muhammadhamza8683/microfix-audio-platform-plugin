@@ -22,6 +22,14 @@ define( 'MICROFIX_PLUGIN_FILE', __FILE__ );
 define( 'MICROFIX_PLUGIN_DIR',  plugin_dir_path( __FILE__ ) );
 define( 'MICROFIX_PLUGIN_URL',  plugin_dir_url( __FILE__ ) );
 
+// ─── Elementor Integration ───────────────────────────────────────────────────
+
+add_action( 'elementor/init', 'microfix_load_elementor_widgets' );
+
+function microfix_load_elementor_widgets(): void {
+    require_once MICROFIX_PLUGIN_DIR . 'includes/elementor-widgets.php';
+}
+
 // ─── Autoload Modules ─────────────────────────────────────────────────────────
 
 require_once MICROFIX_PLUGIN_DIR . 'includes/helpers.php';
@@ -30,7 +38,6 @@ require_once MICROFIX_PLUGIN_DIR . 'includes/access-control.php';
 require_once MICROFIX_PLUGIN_DIR . 'includes/secure-stream.php';
 require_once MICROFIX_PLUGIN_DIR . 'includes/progress-tracker.php';
 require_once MICROFIX_PLUGIN_DIR . 'includes/shortcodes.php';
-require_once MICROFIX_PLUGIN_DIR . 'includes/elementor-widgets.php';
 
 // ─── Frontend Assets ──────────────────────────────────────────────────────────
 
