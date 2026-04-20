@@ -39,7 +39,19 @@ defined( 'ABSPATH' ) || exit;
 
 		<?php if ( $new_this_week > 0 ) : ?>
 		<div class="mfx-dashboard__new-badge">
-			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/></svg>
+			<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none">
+				<g clip-path="url(#clip0_2_92)">
+					<path d="M5.33325 1.33301V3.99967" stroke="#066416" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round"/>
+					<path d="M10.6667 1.33301V3.99967" stroke="#066416" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round"/>
+					<path d="M12.6667 2.66699H3.33333C2.59695 2.66699 2 3.26395 2 4.00033V13.3337C2 14.07 2.59695 14.667 3.33333 14.667H12.6667C13.403 14.667 14 14.07 14 13.3337V4.00033C14 3.26395 13.403 2.66699 12.6667 2.66699Z" stroke="#066416" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round"/>
+					<path d="M2 6.66699H14" stroke="#066416" stroke-width="1.33333" stroke-linecap="round" stroke-linejoin="round"/>
+				</g>
+				<defs>
+					<clipPath id="clip0_2_92">
+					<rect width="16" height="16" fill="white"/>
+					</clipPath>
+				</defs>
+			</svg>
 			<?php echo esc_html( sprintf(
 				_n( '%d new episode unlocks this week', '%d new episodes unlock this week', $new_this_week, 'microfix-audio-platform' ),
 				$new_this_week
@@ -133,32 +145,40 @@ defined( 'ABSPATH' ) || exit;
 	?>
 	<div class="mfx-dashboard__section-label"><?php esc_html_e( 'Continue Listening', 'microfix-audio-platform' ); ?></div>
 
-	<div class="mfx-continue-card">
-		<div class="mfx-continue-card__thumb"
-			style="<?php echo $cl_thumb ? 'background-image:url(' . esc_url( $cl_thumb ) . ')' : 'background:' . esc_attr( $cl_grad ); ?>">
-			<div class="mfx-continue-card__thumb-play">
-				<?php echo do_shortcode( '[mfx_play_button episode_id="' . $cl_id . '"]' ); ?>
-			</div>
-		</div>
-
-		<div class="mfx-continue-card__body">
-			<h4 class="mfx-continue-card__title"><?php echo esc_html( get_the_title( $cl_id ) ); ?></h4>
-			<div class="mfx-continue-card__meta">
-				<?php if ( $cl_date ) : ?>
-				<span><?php echo esc_html( date_i18n( 'F j, Y', strtotime( $cl_date ) ) ); ?></span>
-				<?php endif; ?>
-				<?php if ( $cl_dur ) : ?>
-				<span><?php echo esc_html( $cl_dur ); ?></span>
-				<?php endif; ?>
-			</div>
-			<div class="mfx-continue-card__progress-wrap">
-				<div class="mfx-continue-card__progress">
-					<div class="mfx-continue-card__progress-fill" style="width:<?php echo esc_attr( $cl_prog['percent'] ); ?>%"></div>
+	<div class="mfx-ep-grid mfx-ep-grid--cols-3">
+		<div class="mfx-continue-card">
+			<div class="mfx-continue-card__thumb"
+				style="<?php echo $cl_thumb ? 'background-image:url(' . esc_url( $cl_thumb ) . ')' : 'background:' . esc_attr( $cl_grad ); ?>">
+				<div class="mfx-continue-card__thumb-play">
+					<?php echo do_shortcode( '[mfx_small_play_button episode_id="' . $cl_id . '"]' ); ?>
 				</div>
-				<span class="mfx-continue-card__pct"><?php echo esc_html( $cl_prog['percent'] . '%' ); ?></span>
+			</div>
+
+			<div class="mfx-continue-card__body">
+				<h4 class="mfx-continue-card__title"><?php echo esc_html( get_the_title( $cl_id ) ); ?></h4>
+				<div class="mfx-continue-card__meta">
+					<?php if ( $cl_date ) : ?>
+					<span><?php echo esc_html( date_i18n( 'F j, Y', strtotime( $cl_date ) ) ); ?></span>
+					<?php endif; ?>
+				</div>
+				<div class="mfx-continue-card__dupro">
+					<div class="mfx-continue-card__du">
+						<?php if ( $cl_dur ) : ?>
+							<span><?php echo esc_html( $cl_dur ); ?></span>
+						<?php endif; ?>
+					</div>
+					<div class="mfx-continue-card__progress-wrap">
+						<div class="mfx-continue-card__progress">
+							<div class="mfx-continue-card__progress-fill" style="width:<?php echo esc_attr( $cl_prog['percent'] ); ?>%"></div>
+						</div>
+						<span class="mfx-continue-card__pct"><?php echo esc_html( $cl_prog['percent'] . '%' ); ?></span>
+					</div>
+				</div>
+
 			</div>
 		</div>
 	</div>
+
 	<?php endif; ?>
 
 	<!-- ── All Episodes ──────────────────────────────────────────── -->
