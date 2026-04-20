@@ -38,6 +38,7 @@ require_once MICROFIX_PLUGIN_DIR . 'includes/access-control.php';
 require_once MICROFIX_PLUGIN_DIR . 'includes/secure-stream.php';
 require_once MICROFIX_PLUGIN_DIR . 'includes/progress-tracker.php';
 require_once MICROFIX_PLUGIN_DIR . 'includes/shortcodes.php';
+require_once MICROFIX_PLUGIN_DIR . 'includes/mepr-account-nav.php';
 
 // ─── Frontend Assets ──────────────────────────────────────────────────────────
 
